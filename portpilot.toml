@@ -1,0 +1,17 @@
+[[dev.services]]
+name = "postgres"
+
+[[dev.services]]
+name = "redis"
+
+[[dev.services]]
+name = "kafka"
+
+[[dev.services]]
+name = "mongodb"
+
+[[dev.services]]
+name = "rabbitmq"
+
+[[dev.services]]
+name = "mysql"

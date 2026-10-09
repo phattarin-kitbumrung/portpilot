@@ -1,0 +1,46 @@
+[package]
+name = "portpilot"
+version = "0.1.0"
+edition = "2024"
+description = "Cross-platform port and process inspection toolkit for Rust."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/phattarin-kitbumrung/portpilot"
+homepage = "https://github.com/phattarin-kitbumrung/portpilot"
+documentation = "https://docs.rs/portpilot"
+keywords = ["port", "process", "network", "cli", "devtools"]
+categories = ["command-line-utilities", "development-tools::debugging"]
+
+[dependencies]
+anyhow = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+comfy-table = { version = "7", optional = true }
+crossterm = { version = "0.29", optional = true }
+netstat2 = "0.11"
+ratatui = { version = "0.29", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+sysinfo = "0.30"
+thiserror = "2"
+toml = { version = "0.8", optional = true }
+
+[features]
+default = ["cli"]
+cli = [
+    "dep:anyhow",
+    "dep:clap",
+    "dep:comfy-table",
+    "dep:crossterm",
+    "dep:ratatui",
+    "dep:serde",
+    "dep:toml",
+]
+
+[[bin]]
+name = "portpilot"
+path = "src/bin/portpilot.rs"
+required-features = ["cli"]
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"

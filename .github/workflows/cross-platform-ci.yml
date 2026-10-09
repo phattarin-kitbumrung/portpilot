@@ -1,0 +1,105 @@
+name: Cross-Platform CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      # -------------------------
+      # Static checks
+      # -------------------------
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo check
+        run: cargo check --all-targets --all-features
+
+      # -------------------------
+      # Tests
+      # -------------------------
+
+      - name: Cargo test
+        run: cargo test --all-targets --all-features
+
+      # -------------------------
+      # Runtime smoke tests
+      # -------------------------
+
+      - name: Smoke test - list
+        run: cargo run --quiet -- list
+
+      - name: Smoke test - dev
+        run: cargo run --quiet -- dev
+
+
+  integration:
+    name: Integration / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: check
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Build the CLI once before integration tests
+      - name: Build CLI
+        run: cargo build --release --features cli
+
+      # Basic CLI validation
+      - name: CLI help
+        run: cargo run --quiet --features cli -- --help
+
+      - name: CLI list
+        run: cargo run --quiet --features cli -- list
+
+      - name: CLI dev
+        run: cargo run --quiet --features cli -- dev

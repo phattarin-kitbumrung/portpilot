@@ -1,0 +1,31 @@
+[[services]]
+name = "postgres"
+image = "postgres:latest"
+default_port = 5432
+env = ["POSTGRES_PASSWORD=postgres"]
+
+[[services]]
+name = "redis"
+image = "redis:latest"
+default_port = 6379
+
+[[services]]
+name = "kafka"
+image = "apache/kafka:latest"
+default_port = 9092
+
+[[services]]
+name = "rabbitmq"
+image = "rabbitmq:latest"
+default_port = 5672
+
+[[services]]
+name = "mongodb"
+image = "mongo:latest"
+default_port = 27017
+
+[[services]]
+name = "mysql"
+image = "mysql:latest"
+default_port = 3306
+env = ["MYSQL_ROOT_PASSWORD=mysql"]
