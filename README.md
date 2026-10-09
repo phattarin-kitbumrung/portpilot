@@ -55,6 +55,8 @@ portpilot port 3000
 portpilot process node
 portpilot inspect 18231
 portpilot kill 3000
+portpilot kill 3000 --port   # force port
+portpilot kill 18231 --pid   # force PID
 portpilot watch --interval-ms 1000
 portpilot dev
 portpilot dev add rabbitmq
@@ -83,6 +85,8 @@ default_port = 6379
 ```
 
 `dev up` / `dev down` start/stop each service as Docker container `portpilot-<name>`.
+
+`kill` asks for confirmation. If the number is both a listening port and a PID it refuses to guess; pass `--port` or `--pid`.
 
 ## Design notes
 

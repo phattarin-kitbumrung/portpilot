@@ -44,8 +44,15 @@ enum Command {
     Process {
         query: String,
     },
+    /// Kill a process by port or PID (asks for confirmation first)
     Kill {
         target: String,
+        /// Treat the target as a port
+        #[arg(long, conflicts_with = "pid")]
+        port: bool,
+        /// Treat the target as a PID
+        #[arg(long)]
+        pid: bool,
     },
     Inspect {
         pid: u32,
@@ -163,14 +170,9 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Command::Kill { target } => {
+        Command::Kill { target, port, pid } => {
             let target_num = target.parse::<u32>()?;
-            let termination_target = match u16::try_from(target_num) {
-                Ok(port_candidate) if pilot.find_by_port(port_candidate).is_ok() => {
-                    TerminationTarget::Port(port_candidate)
-                }
-                _ => TerminationTarget::Pid(target_num),
-            };
+            let termination_target = resolve_kill_target(&pilot, target_num, port, pid)?;
 
             let pid = match termination_target {
                 TerminationTarget::Port(port) => pilot.find_by_port(port)?.pid,
@@ -245,6 +247,31 @@ const CATALOG_FILE_NAME: &str = "catalog.toml";
 const DEFAULT_CATALOG: &str = include_str!("../../catalog.toml");
 
 const CONFIG_FILE_NAME: &str = "portpilot.toml";
+
+fn resolve_kill_target(
+    pilot: &PortPilot,
+    target: u32,
+    force_port: bool,
+    force_pid: bool,
+) -> Result<TerminationTarget> {
+    let as_port = u16::try_from(target)
+        .ok()
+        .filter(|port| pilot.find_by_port(*port).is_ok());
+    if force_pid {
+        return Ok(TerminationTarget::Pid(target));
+    }
+    if force_port {
+        let port = u16::try_from(target).context("port must be between 0 and 65535")?;
+        return Ok(TerminationTarget::Port(port));
+    }
+    match as_port {
+        Some(_) if pilot.inspect_pid(target).is_ok() => Err(anyhow!(
+            "{target} is both a listening port and a PID; re-run with --port or --pid"
+        )),
+        Some(port) => Ok(TerminationTarget::Port(port)),
+        None => Ok(TerminationTarget::Pid(target)),
+    }
+}
 
 fn run_dev_command(pilot: &PortPilot, command: Option<DevCommand>) -> Result<()> {
     match command {
@@ -800,5 +827,171 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KB", value / KB)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog() -> Catalog {
+        toml::from_str(
+            r#"
+            [[services]]
+            name = "redis"
+            image = "redis:7"
+            default_port = 6379
+
+            [[services]]
+            name = "postgres"
+            image = "postgres:16"
+            default_port = 5432
+            env = ["POSTGRES_PASSWORD=x"]
+            "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn format_bytes_uses_expected_units() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.0 MB");
+        assert_eq!(format_bytes(1536 * 1024), "1.5 MB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    #[test]
+    fn normalize_service_name_trims_and_lowercases() {
+        assert_eq!(normalize_service_name("  RabbitMQ ").unwrap(), "rabbitmq");
+        assert!(normalize_service_name("   ").is_err());
+        assert!(normalize_service_name("").is_err());
+    }
+
+    #[test]
+    fn container_name_is_prefixed() {
+        assert_eq!(container_name("redis"), "portpilot-redis");
+    }
+
+    #[test]
+    fn bundled_catalog_parses_and_has_unique_names() {
+        let catalog: Catalog = toml::from_str(DEFAULT_CATALOG).unwrap();
+        assert!(!catalog.services.is_empty());
+        let mut names: Vec<_> = catalog.services.iter().map(|s| s.name.clone()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), catalog.services.len());
+        assert!(catalog.services.iter().all(|s| s.default_port > 0));
+    }
+
+    #[test]
+    fn catalog_entry_is_case_insensitive() {
+        let catalog = catalog();
+        assert_eq!(catalog_entry(&catalog, "REDIS").unwrap().image, "redis:7");
+        let err = catalog_entry(&catalog, "nope").unwrap_err().to_string();
+        assert!(err.contains("not found in the catalog"));
+    }
+
+    #[test]
+    fn catalog_env_defaults_to_empty() {
+        let catalog = catalog();
+        assert!(catalog_entry(&catalog, "redis").unwrap().env.is_empty());
+        assert_eq!(catalog_entry(&catalog, "postgres").unwrap().env.len(), 1);
+    }
+
+    #[test]
+    fn resolve_entries_preserves_config_order_and_fails_on_unknown() {
+        let catalog = catalog();
+        let mut config = default_config();
+        config.dev.services = vec![
+            DevService {
+                name: "postgres".into(),
+            },
+            DevService {
+                name: "redis".into(),
+            },
+        ];
+        let names: Vec<_> = resolve_entries(&config, &catalog)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, vec!["postgres", "redis"]);
+
+        config.dev.services.push(DevService {
+            name: "ghost".into(),
+        });
+        assert!(resolve_entries(&config, &catalog).is_err());
+    }
+
+    #[test]
+    fn config_round_trips_through_toml() {
+        let mut config = default_config();
+        config.dev.services.push(DevService {
+            name: "redis".into(),
+        });
+        let raw = toml::to_string_pretty(&config).unwrap();
+        let parsed: PortPilotConfig = toml::from_str(&raw).unwrap();
+        assert_eq!(parsed.dev.services.len(), 1);
+        assert_eq!(parsed.dev.services[0].name, "redis");
+    }
+
+    #[test]
+    fn row_navigation_stays_within_bounds() {
+        let mut state = TableState::default();
+        next_row(&mut state, 0);
+        assert_eq!(state.selected(), None);
+
+        next_row(&mut state, 3);
+        assert_eq!(state.selected(), Some(0));
+        next_row(&mut state, 3);
+        next_row(&mut state, 3);
+        next_row(&mut state, 3);
+        assert_eq!(state.selected(), Some(2));
+
+        prev_row(&mut state);
+        assert_eq!(state.selected(), Some(1));
+        prev_row(&mut state);
+        prev_row(&mut state);
+        assert_eq!(state.selected(), Some(0));
+    }
+
+    #[test]
+    fn normalize_selection_clamps_and_clears() {
+        let mut state = TableState::default();
+        normalize_selection(&mut state, 5);
+        assert_eq!(state.selected(), Some(0));
+
+        state.select(Some(9));
+        normalize_selection(&mut state, 5);
+        assert_eq!(state.selected(), Some(4));
+
+        state.select(Some(2));
+        normalize_selection(&mut state, 5);
+        assert_eq!(state.selected(), Some(2));
+
+        normalize_selection(&mut state, 0);
+        assert_eq!(state.selected(), None);
+    }
+
+    #[test]
+    fn selected_binding_handles_none_and_out_of_range() {
+        let binding = PortBinding {
+            port: 1,
+            protocol: portpilot::models::Protocol::Tcp,
+            pid: 2,
+            process: "p".into(),
+            status: None,
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+        };
+        let list = vec![binding];
+        let mut state = TableState::default();
+        assert!(selected_binding(&list, &state).is_none());
+        state.select(Some(0));
+        assert_eq!(selected_binding(&list, &state).unwrap().pid, 2);
+        state.select(Some(5));
+        assert!(selected_binding(&list, &state).is_none());
     }
 }

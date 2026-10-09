@@ -131,3 +131,52 @@ fn tcp_state_to_string(state: TcpState) -> String {
         TcpState::Unknown => "UNKNOWN".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn tcp_state_names_are_stable() {
+        assert_eq!(tcp_state_to_string(TcpState::Listen), "LISTEN");
+        assert_eq!(tcp_state_to_string(TcpState::Established), "ESTABLISHED");
+        assert_eq!(tcp_state_to_string(TcpState::TimeWait), "TIME_WAIT");
+        assert_eq!(tcp_state_to_string(TcpState::Unknown), "UNKNOWN");
+    }
+
+    #[test]
+    fn list_bindings_sees_own_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let bindings = list_bindings().unwrap();
+        let mine = bindings
+            .iter()
+            .find(|b| b.port == port && b.pid == std::process::id())
+            .expect("own listener should be listed");
+        assert_eq!(mine.protocol, Protocol::Tcp);
+        assert_eq!(mine.status.as_deref(), Some("LISTEN"));
+    }
+
+    #[test]
+    fn inspect_process_reports_current_process() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let details = inspect_process(std::process::id()).unwrap();
+        assert_eq!(details.pid, std::process::id());
+        assert!(!details.command.is_empty());
+        assert!(details.ports.contains(&port));
+    }
+
+    #[test]
+    fn inspect_and_kill_missing_pid_return_not_found() {
+        assert!(matches!(
+            inspect_process(u32::MAX - 1),
+            Err(PortPilotError::PidNotFound(_))
+        ));
+        assert!(matches!(
+            kill_process(u32::MAX - 1),
+            Err(PortPilotError::PidNotFound(_))
+        ));
+    }
+}
